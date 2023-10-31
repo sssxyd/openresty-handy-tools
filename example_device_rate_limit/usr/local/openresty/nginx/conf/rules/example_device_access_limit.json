@@ -1,0 +1,10 @@
+{
+    "global":[
+        {"feature": "single_command_hits","duration": 3,"threshold": 1},
+        {"feature": "total_command_hits","duration": 10,"threshold": 2}
+    ],
+    "commands":{
+        "lua.abc": [],
+        "lua.efg": []
+    }
+}

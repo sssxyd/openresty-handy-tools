@@ -1,0 +1,12 @@
+{
+    "global":[
+        {"feature": "avg_exec_time","duration": 60,"threshold": 100},
+        {"feature": "biz_fail_count","duration": 60,"threshold": 100},
+        {"feature": "biz_fail_percent","duration": 60,"threshold": 10},
+        {"feature": "sys_fail_count","duration": 60,"threshold": 10}
+    ],
+    "commands":{
+        "lua.abc": [],
+        "lua.efg": []
+    }
+}

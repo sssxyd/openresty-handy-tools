@@ -1,0 +1,15 @@
+{
+    "global":[
+        {"feature": "avg_exec_time","duration": 60,"threshold": 500, "probability": 50},
+        {"feature": "biz_fail_count","duration": 60,"threshold": 20, "probability": 70},
+        {"feature": "biz_fail_percent","duration": 60,"threshold": 10.5, "probability": 65},
+        {"feature": "sys_fail_count","duration": 300,"threshold": 20, "probability": 66},
+        {"feature": "sys_fail_percent","duration": 60,"threshold": 25.5, "probability": 55},
+        {"feature": "fail_count","duration": 60,"threshold": 30, "probability": 62.37},
+        {"feature": "fail_percent","duration": 60,"threshold": 17.5, "probability": 58}
+    ],
+    "commands":{
+        "lua.abc": [],
+        "lua.efg": []
+    }
+}
