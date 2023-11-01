@@ -2,7 +2,7 @@
 升级你的Nginx，通过编辑规则文件，实现灵活配置的客户端访问频次限制，为第三方接口调用增加熔断报警功能。
 
 ## 安装Openresty及module
-请参照官方文档安装[Openresty](https://openresty.org/en/linux-packages.html) 
+请参照官方文档安装[Openresty](https://openresty.org/cn/linux-packages.html) 
 然后安装以下module 
 openresty/lua-resty-redis 
 openresty/lua-resty-upstream-healthcheck 
