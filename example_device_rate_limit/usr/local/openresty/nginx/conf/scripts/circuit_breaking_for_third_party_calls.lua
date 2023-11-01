@@ -240,14 +240,17 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
       if actual_value >= threshold then
         -- Perform the alerting operation asynchronously
         if restybase.check_probability(rule.probability) then
-          local actual_value_str = tostring(actual_value)
-          local threshold_str = tostring(rule.threshold)
-          if string.endsWith(rule.feature, "_percent") then
-            actual_value_str = string.format("%.2f", actual_value) .. "%"
-            threshold_str = string.format("%.2f", rule.threshold) .. "%"
-          end        
-          local msg = string.format("The feature [%s] for the command [%s] is %s in the last %d seconds, exceeding the threshold of %s", rule.feature, command, actual_value_str, rule.duration, threshold_str)        
-          local ok, err = ngx.timer.at(0, timer_send_alarm, msg)
+          local msg = {
+            feature = rule.feature,
+            duration = rule.duration,
+            threshold = rule.threshold,
+            probability = rule.probability or 100
+            command = command,
+            actual_value = actual_value,
+            client_ip = client_ip = ngx.var.remote_addr,
+            trigger_time = ngx.time()
+          }
+          local ok, err = ngx.timer.at(0, timer_send_alarm, cjson.encode(msg))
           if not ok then
               ngx.log(ngx.ERR, "failed to create timer: ", err)
           end
