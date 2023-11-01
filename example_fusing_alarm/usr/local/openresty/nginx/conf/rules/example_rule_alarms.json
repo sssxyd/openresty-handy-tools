@@ -1,12 +1,14 @@
 {
-    "global":[
-        {"feature": "avg_exec_time","duration": 60,"threshold": 100},
-        {"feature": "biz_fail_count","duration": 60,"threshold": 100},
-        {"feature": "biz_fail_percent","duration": 60,"threshold": 10},
-        {"feature": "sys_fail_count","duration": 60,"threshold": 10}
-    ],
-    "commands":{
-        "lua.abc": [],
-        "lua.efg": []
-    }
+	"global":[
+		{"feature": "avg_exec_time","duration": 60,"threshold": 2000},
+		{"feature": "fail_percent","duration": 60,"threshold": 33.3},
+		{"feature": "fail_count","duration": 60,"threshold": 10}
+	],
+	"commands":{
+		"ignorable/donotalarm/user.login": [],
+		"important/customrules/pay": [
+			{"feature": "avg_exec_time","duration": 60,"threshold": 1000},
+			{"feature": "fail_count","duration": 30,"threshold": 1}
+		]
+	}
 }

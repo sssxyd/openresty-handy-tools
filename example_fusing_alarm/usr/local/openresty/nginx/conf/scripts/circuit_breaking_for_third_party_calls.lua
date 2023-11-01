@@ -202,35 +202,6 @@ local function timer_send_alarm(premature, msg)
 
 end
 
-local function check_fuse_probability(command, rule, actual_value)
-  -- Circuit-breaking probability, up to a maximum of 100%
-  local probability = rule.probability * 0.01
-  
-  if probability <= 0 then
-    return false
-  end
-  
-  -- Generate a random probability; if it is greater than the circuit-breaking probability, do not trigger the circuit breaker
-  local probability_str = ""
-  if probability < 1 then
-    local prob = math.random()
-    probability_str = string.format(", and the random probability for this request is %.2f%%, which is less than or equal to the set circuit-breaking probability of %.2f%%, triggering the circuit breaker.", prob*100, probability*100)
-    if prob > probability then
-      return false
-    end
-  end
-  
-  local actual_value_str = tostring(actual_value)
-  local threshold_str = tostring(rule.threshold)
-  if string.endsWith(rule.feature, "_percent") then
-    actual_value_str = string.format("%.2f", actual_value) .. "%"
-    threshold_str = string.format("%.2f", rule.threshold) .. "%"
-  end
-  
-  ngx.log(ngx.ERR, "[FUSING] The feature [", rule.feature, "] for the command [", command, "] is ", actual_value_str, " in the last ", rule.duration, " seconds, exceeding the threshold of ", threshold_str, probability_str)
-  return true
-end
-
 local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
   local command_redis_key = restybase.get_command_redis_key(command)
   local alarm_rules = get_alarm_rules(alarm_rules_name, command)
@@ -265,18 +236,21 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
       else
         actual_value = 0
       end
+      
       if actual_value >= threshold then
         -- Perform the alerting operation asynchronously
-        local actual_value_str = tostring(actual_value)
-        local threshold_str = tostring(rule.threshold)
-        if string.endsWith(rule.feature, "_percent") then
-          actual_value_str = string.format("%.2f", actual_value) .. "%"
-          threshold_str = string.format("%.2f", rule.threshold) .. "%"
-        end        
-        local msg = string.format("The feature [%s] for the command [%s] is %s in the last %d seconds, exceeding the threshold of %s", rule.feature, command, actual_value_str, rule.duration, threshold_str)        
-        local ok, err = ngx.timer.at(0, timer_send_alarm, msg)
-        if not ok then
-            ngx.log(ngx.ERR, "failed to create timer: ", err)
+        if restybase.check_probability(rule.probability) then
+          local actual_value_str = tostring(actual_value)
+          local threshold_str = tostring(rule.threshold)
+          if string.endsWith(rule.feature, "_percent") then
+            actual_value_str = string.format("%.2f", actual_value) .. "%"
+            threshold_str = string.format("%.2f", rule.threshold) .. "%"
+          end        
+          local msg = string.format("The feature [%s] for the command [%s] is %s in the last %d seconds, exceeding the threshold of %s", rule.feature, command, actual_value_str, rule.duration, threshold_str)        
+          local ok, err = ngx.timer.at(0, timer_send_alarm, msg)
+          if not ok then
+              ngx.log(ngx.ERR, "failed to create timer: ", err)
+          end
         end
       end
     end
@@ -315,7 +289,15 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
     
     if actual_value >= threshold then
       -- Attempt to trigger circuit breaking; if circuit breaking is confirmed, return immediately; otherwise, continue to evaluate other rules.
-      if check_fuse_probability(command, rule, actual_value) then
+      if restybase.check_probability(rule.probability) then
+        local actual_value_str = tostring(actual_value)
+        local threshold_str = tostring(rule.threshold)
+        if string.endsWith(rule.feature, "_percent") then
+          actual_value_str = string.format("%.2f", actual_value) .. "%"
+          threshold_str = string.format("%.2f", rule.threshold) .. "%"
+        end
+        
+        ngx.log(ngx.ERR, "[FUSING] The feature [", rule.feature, "] for the command [", command, "] is ", actual_value_str, " in the last ", rule.duration, " seconds, exceeding the threshold of ", threshold_str, probability_str)        
         return true
       end
     end

@@ -236,6 +236,23 @@ function _M.get_request_start_time()
   return ngx.ctx.request_start_time
 end
 
+function _M.check_probability(probability)
+  if probability == nil or tonumber(probability) == nil then
+    return true
+  end
+  
+  local val = tonumber(probability)
+  if val >= 100 then
+    return true
+  end
+  
+  if val <= 0 then
+    return false
+  end
+  
+  return math.random() * 100 > val
+end
+
 function _M.split_list(input_list, chunk_size)
   if input_list == nil or next(input_list) == nil then
     return {}

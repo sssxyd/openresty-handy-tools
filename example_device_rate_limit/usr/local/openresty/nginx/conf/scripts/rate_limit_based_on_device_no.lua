@@ -126,8 +126,10 @@ local function do_device_access_limit(current_seconds, device_no, command, comma
     end
     
     if real_value >= tonumber(rule.threshold) then
-      ngx.log(ngx.ERR, "[LIMIT] device[", device_no , "] command[", command, "] hits already ", real_value, " times in ", rule.duration, " seconds, reach  threshold[", rule.threshold , "] of rule", rule.feature)
-      return true
+      if restybase.check_probability(rule.probability) then
+        ngx.log(ngx.ERR, "[LIMIT] device[", device_no , "] command[", command, "] hits already ", real_value, " times in ", rule.duration, " seconds, reach  threshold[", rule.threshold , "] of rule ", rule.feature)
+        return true
+      end
     end
   end
   
