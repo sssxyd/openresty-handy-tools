@@ -1,6 +1,39 @@
 # openresty-handy-tools
 升级你的Nginx，通过编辑规则文件，实现灵活配置的客户端访问频次限制，为第三方接口调用增加熔断报警功能。
 
+## 安装Openresty及module
+请参照官方文档安装[Openresty](https://openresty.org/cn/linux-packages.html) 
+然后安装以下module 
+openresty/lua-resty-redis 
+openresty/lua-resty-upstream-healthcheck 
+pintsized/lua-resty-http 
+
+CentOS可以如下方式安装 
+<pre lang="no-highlight"><code>
+yum install -y yum-utils
+
+# CentOS 8 or older
+yum-config-manager --add-repo https://openresty.org/package/centos/openresty.repo
+# CentOS 9 or later
+yum-config-manager --add-repo https://openresty.org/package/centos/openresty2.repo
+
+yum install -y openresty
+yum install -y openresty-opm openresty-resty
+
+opm get openresty/lua-resty-redis
+opm get openresty/lua-resty-upstream-healthcheck
+opm get pintsized/lua-resty-http
+
+systemctl enable openresty
+
+</code></pre>
+
+## 配置速率限制
+
+
+## 配置熔断&报警
+
+
 ## 编辑规则
 ### 路径
 规则json文件默认路径为：/usr/local/openresty/nginx/conf/rules/
@@ -50,6 +83,7 @@ example_rule_fuse.json
 7. fail_percent: (接口调用成功但发生业务异常的次数 + 接口调用失败的次数)//该接口总调用次数 * 100%
 
 #### 说明
-1. 接口调用失败: 即第三方返回的HTTP Status Code不是200
-2. 接口调用成功但发生业务异常：第三方返回HTTP Status Code是200，但同时返回header: x-response-code 的值不是1
+1. 接口调用失败: 即第三方返回的 HTTP_Status_Code != 200
+2. 接口调用成功但发生业务异常：第三方返回 HTTP_Status_Code == 200 && Response_Headers["x-response-code"] != 1
+   
 
