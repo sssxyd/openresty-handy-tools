@@ -29,7 +29,84 @@ systemctl enable openresty
 </code></pre>
 
 ## 配置速率限制
+1. 将example_device_rate_limit目录中的内容覆盖到本地相同目录
+2. 编辑nginx.conf，配置redis连接、缓存数据过期时间、健康检查地址
+<pre lang="no-highlight"><code>
+    init_by_lua_block {
+        local restybase = require("restybase")
+        restybase.init_by_lua_block({
+            redis = {
+                host = "127.0.0.1",     --redis host
+                port = 6379,            --redis port
+                auth = "password",      --redis requirepass
+                pool_size = 32,         --client connection pool size
+                idle_millis = 10000     --max milliseconds of a connection stays idle in the connection pool
+            }, 
+            rule_path = "/usr/local/openresty/nginx/conf/rules"
+        })
+        
+        local rate_limit_based_on_device_no = require("rate_limit_based_on_device_no")
+        rate_limit_based_on_device_no.init_by_lua_block({
+            expired_seconds = 600       --redis key expired seconds
+        })
+    }
+    init_worker_by_lua_block{
+        local restybase = require("restybase")
+        restybase.init_worker_by_lua_block()
+        
+        local hc = require("resty.upstream.healthcheck")
+        
+        local ok, err = hc.spawn_checker{
+            shm = "healthcheck",  -- lua_shared_dict
+            upstream = "device_rate_limit_backend",  -- upstream name
+            type = "http",
+            http_req = "GET /guest/healthcheck HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n",  -- http request for checking
+            interval = 2000,  -- run the check cycle every 2 sec
+            timeout = 1000,   -- 1 sec is the timeout for network operations
+            fall = 3,  -- # of successive failures before turning a peer down
+            rise = 2,  -- # of successive successes before turning a peer up
+            valid_statuses = {200, 302},  -- a list valid HTTP status code
+            concurrency = 10,  -- concurrency level for test requests
+        }
 
+        if not ok then
+            ngx.log(ngx.ERR, "failed to spawn health checker: ", err)
+            return
+        end
+    }	   
+</code></pre>
+3. 编辑conf.d/device_rate_limit.conf, 配置后端服务器、使用的现在规则JSON文件名称
+<pre lang="no-highlight"><code>	   
+#The name of this upstream. It has health checks configured in nginx.conf. 
+#If you need to change the name, make sure to update it there as well
+upstream device_rate_limit_backend {
+    least_conn;
+    server 192.168.3.108:18080;
+    server 192.168.3.207:18080;
+}
+
+server {
+    listen 10001;
+    server_name _;
+
+    location / {
+        access_by_lua_block {
+            local restybase = require("restybase")
+            restybase.access_by_lua_block()
+            
+            local rate_limit_based_on_device_no = require("rate_limit_based_on_device_no")
+            --set the name of the JSON-Formatted rule file used for validation
+            if rate_limit_based_on_device_no.access_by_lua_block({
+                rule="example_device_access_limit"
+            }) then
+                ngx.exit(429)  
+            end
+        }
+        proxy_pass http://device_rate_limit_backend;
+    }
+} 
+   </code></pre>
+4. 在rules目录里新建或编辑规则JSON文件，可参加实例规则文件：example_device_access_limit.json
 
 ## 配置熔断&报警
 
