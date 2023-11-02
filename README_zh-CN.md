@@ -203,20 +203,20 @@ example_rule_fuse.json
 3. commands中配置了空规则，表示本接口忽略，不对其做任何操作
 
 ### 规则的结构
-1. feature：指标名称，由lua模组提供，不同的模组支持不同的指标
-2. duration：计算指标的时间段，单位为秒，表示迄今为止xx秒
-3. threshold：阈值，计算出的指标值达到该阈值时，规则触发
-4. probability：触发几率，可选，默认100%，表示指标值达到阈值时，以此几率触发规则
+1. **feature**：指标名称，由lua模组提供，不同的模组支持不同的指标
+2. **duration**：计算指标的时间段，单位为秒，表示迄今为止xx秒
+3. **threshold**：阈值，计算出的指标值达到该阈值时，规则触发
+4. **probability**：触发几率，可选，默认100%，表示指标值达到阈值时，以此几率触发规则
 
 ### rate_limit_based_on_device_no 支持的指标
-1. single_command_hits：单一设备号访问特定接口的次数
-2. total_command_hits：单一设备号访问未忽略接口的总次数
+1. **single_command_hits**：单一设备号访问特定接口的次数
+2. **total_command_hits**：单一设备号访问未忽略接口的总次数
 
 ### circuit_breaking_for_third_party_calls 支持的指标
-1. avg_exec_time: 接口执行的平均时间(毫秒)
-2. biz_fail_count: 接口调用返回的HTTP状态码是200，但业务逻辑上异常(即Response中存在header: **x-response-code**, 且其值为1)
-3. biz_fail_percent: 接口调用成功但发生业务异常的次数/该接口总调用次数 * 100%
-4. sys_fail_count: 接口调用返回的HTTP状态码不是200
-5. sys_fail_percent: 接口调用失败的次数/该接口总调用次数 * 100%
-6. fail_count: 接口调用成功但发生业务异常的次数 + 接口调用失败的次数
-7. fail_percent: (接口调用成功但发生业务异常的次数 + 接口调用失败的次数)//该接口总调用次数 * 100%
+1. **avg_exec_time**: 接口执行的平均时间(毫秒)
+2. **biz_fail_count**: 接口调用返回的HTTP状态码是200，但业务逻辑上异常(即Response中存在header: **x-response-code**, 且其值不等于1)
+3. **biz_fail_percent**: 接口调用成功但发生业务异常的次数/该接口总调用次数 * 100%
+4. **sys_fail_count**: 接口调用返回的HTTP状态码不是200
+5. **sys_fail_percent**: 接口调用失败的次数/该接口总调用次数 * 100%
+6. **fail_count**: 接口调用成功但发生业务异常的次数 + 接口调用失败的次数
+7. **fail_percent**: (接口调用成功但发生业务异常的次数 + 接口调用失败的次数)//该接口总调用次数 * 100%
