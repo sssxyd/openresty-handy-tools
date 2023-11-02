@@ -1,8 +1,11 @@
 {
 	"global":[
 		{"feature": "avg_exec_time","duration": 60,"threshold": 500, "probability": 50},
+		{"feature": "biz_fail_count","duration": 60,"threshold": 10.5, "probability": 65},
 		{"feature": "biz_fail_percent","duration": 60,"threshold": 10.5, "probability": 65},
 		{"feature": "sys_fail_count","duration": 30,"threshold": 20, "probability": 66},
+		{"feature": "sys_fail_percent","duration": 30,"threshold": 50, "probability": 33.3},
+		{"feature": "fail_count","duration": 60,"threshold": 100, "probability": 20},
 		{"feature": "fail_percent","duration": 60,"threshold": 50}
 	],
 	"commands":{

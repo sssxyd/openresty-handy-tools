@@ -207,6 +207,11 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
   local alarm_rules = get_alarm_rules(alarm_rules_name, command)
   local fuse_rules = get_fuse_rules(fuse_rules_name, command)
   
+  if alarm_rules == nil and fuse_rules == nil then
+    ngx.ctx.request_ignorable = true
+    return false
+  end
+  
   local duration_exec_status = {}
   local feature, duration, threshold, status, duration_key, actual_value
   local avg_exec_time, biz_fail_count, sys_fail_count, total_exec_count
@@ -424,6 +429,10 @@ end
 function _M.header_filter_by_lua_block()
   local command = restybase.get_request_command()
   if command == nil then
+    return
+  end
+  
+  if ngx.ctx.request_ignorable then
     return
   end
   
