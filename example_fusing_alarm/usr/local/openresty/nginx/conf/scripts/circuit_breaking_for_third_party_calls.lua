@@ -10,16 +10,28 @@ Usage: Provides the following circuit breaking/alerting rules:
 5. sys_fail_percent: Percentage of system failures
 6. fail_count: Number of request failures
 7. fail_percent: Percentage of request failures
+8. global_biz_fail_count: All interface business failure count
+9. global_biz_fail_percent: All interface business failure percentage
+10: global_sys_fail_count: All interface system failure count
+11: global_sys_fail_percent: All interface system failure percentage
+12: global_fail_count: All interface business failure count
+13: global_fail_percent: All interface business failure percentage
 Please note: For circuit breaking rules, a breaking probability can be set. When a request is deemed to require circuit breaking, a random percentage is calculated. If this percentage is less than the set probability, the request will be blocked; otherwise, it will be allowed through.
 If a probability is not set for a circuit breaking rule, it defaults to 100, meaning any trigger of the circuit breaking rule will definitely result in a block.
 ]]
 
 local _M = {}
 _M.alarm_http_url = nil
+_M.expired_seconds = 600
 
 local restybase = require("restybase")
 local cjson = require("cjson")
 local http = require("resty.http")
+
+local function get_expired_seconds()
+  return _M.expired_seconds
+end
+
 
 -- Retrieve the business-level success status of an API call from the response header.
 local function get_response_business_code()
@@ -42,8 +54,8 @@ local function get_command_exec_status(command_redis_key, duration)
   
   client:init_pipeline(2)
   
-  client:zrangebyscore("resty_aesm_exec_time_" .. command_redis_key, start_time, end_time)
-  client:zrangebyscore("resty_aesm_exec_status_" .. command_redis_key, start_time, end_time)
+  client:zrangebyscore("resty_apistatus_exec_time_" .. command_redis_key, start_time, end_time)
+  client:zrangebyscore("resty_apistatus_exec_status_" .. command_redis_key, start_time, end_time)
   
   local responses, errors = client:commit_pipeline()
   restybase.close_redis_client(client)
@@ -59,6 +71,64 @@ local function get_command_exec_status(command_redis_key, duration)
   return duration_exec_times, duration_exec_status
 end
 
+local function calc_global_exec_features(current_seconds, duration)
+  local client = restybase.get_redis_client()
+  if client == nil then
+    return {global_exec_count = 1, global_biz_fail_count = 0, global_sys_fail_count = 0}
+  end
+  local end_seconds = current_seconds
+  local start_seconds = current_seconds - duration
+  local seconds_count = end_seconds - start_seconds + 1
+  local global_exec_count_prefix = "resty_apistatus_global_exec_count_"
+  local global_biz_fail_prefix = "resty_apistatus_global_bizfail_count_"
+  local global_sys_fail_prefix = "resty_apistatus_global_sysfail_count_"
+  
+  client:init_pipeline(seconds_count * 3)
+  
+  for i = start_seconds, end_seconds do
+    client:get(global_exec_count_prefix .. i)
+  end
+  
+  for i = start_seconds, end_seconds do
+    client:get(global_biz_fail_prefix .. i)
+  end
+  
+  for i = start_seconds, end_seconds do
+    client:get(global_sys_fail_prefix .. i)
+  end
+  
+  local responses, errors = client:commit_pipeline()
+  restybase.close_redis_client(client)  
+  
+  if not responses then
+    ngx.log(ngx.ERR, "Failed to commit Redis pipeline: ", errors)
+    return {global_exec_count = 1, global_biz_fail_count = 0, global_sys_fail_count = 0}
+  end
+
+  local idx = 0
+  local global_exec_count = 0
+  local global_biz_fail_count = 0
+  local global_sys_fail_count = 0
+  for i, res in ipairs(responses) do
+    local value = 0
+    if res ~= ngx.null then
+      value = (tonumber(res) or 0)
+    end
+    
+    if idx < second_count then
+      global_exec_count = global_exec_count + value
+    elseif idx < second_count * 2 then
+      global_biz_fail_count = global_biz_fail_count + value
+    else
+      global_sys_fail_count = global_sys_fail_count + value
+    end
+    
+    idx = idx + 1
+  end  
+  
+  return {global_exec_count = global_exec_count, global_biz_fail_count = global_biz_fail_count, global_sys_fail_count = global_sys_fail_count}
+end
+
 -- Calculate the actual values of various metrics within the time interval of duration (in seconds).
 local function calc_command_exec_features(command_redis_key, duration)
   local duration_exec_times, duration_exec_status = get_command_exec_status(command_redis_key, duration)
@@ -67,7 +137,7 @@ local function calc_command_exec_features(command_redis_key, duration)
   local sys_fail_count = 0
   local total_exec_count = 0
   if duration_exec_times == nil or duration_exec_status == nil then
-    return {avg_exec_time = avg_exec_time, biz_fail_count = biz_fail_count, sys_fail_count = sys_fail_count, total_exec_count = 1}
+    return {avg_exec_time = avg_exec_time, biz_fail_count = biz_fail_count, sys_fail_count = sys_fail_count, total_exec_count = 1 }
   end
   
   -- Iterate through execution times to calculate the average execution time (in millisenconds)
@@ -115,52 +185,6 @@ local function calc_command_exec_features(command_redis_key, duration)
   return {avg_exec_time = avg_exec_time, biz_fail_count = biz_fail_count, sys_fail_count = sys_fail_count, total_exec_count = total_exec_count}
 end
 
--- Parse the rules in x-fuse-rules and x-alarm-rules from the HTTP request header.
-local function split_rules(rule_str)
-  if rule_str == nil or rule_str == "" then
-    return nil
-  end
-  
-  local result = {}
-  local feature, duration, threshold, probability
-  local rules = rule_str:trim():split(",")
-  for _, rule in ipairs(rules) do
-    local items = rule:trim():split(":")
-    local len = #items
-    if len == 3 then
-      table.insert(result, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = 100 })
-    else
-      table.insert(result, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = tonumber(items[4]:trim()) })
-    end 
-  end
-  
-  if next(result) == nil then
-    return nil
-  end
-  
-  return result
-end
-
-local function get_fuse_rules(fuse_rules_name, command)
-  -- First, retrieve the circuit-breaking rules declared by the caller.
-  local fuse_rules = split_rules(ngx.req.get_headers()["x-fuse-rules"])
-  if fuse_rules ~= nil then
-    return fuse_rules
-  end
-  
-  return restybase.get_command_rules(fuse_rules_name, command)
-end
-
-local function get_alarm_rules(alarm_rules_name, command)
-  -- First, retrieve the alerting rules declared by the caller.
-  local alarm_rules = split_rules(ngx.req.get_headers()["x-alarm-rules"])
-  if alarm_rules ~= nil then
-    return alarm_rules
-  end
-  
-  return restybase.get_command_rules(alarm_rules_name, command)
-end
-
 local function timer_send_alarm(premature, msg)
   if premature then
     return
@@ -202,57 +226,88 @@ local function timer_send_alarm(premature, msg)
 
 end
 
+local function calc_feature_actual_value(feature, status)
+  local actual_value = 0
+  if feature:startsWith("total") then
+    local global_exec_count, global_biz_fail_count, global_sys_fail_count = status.global_all_exec_count, status.global_biz_fail_count, status.global_sys_fail_count
+    if feature == "global_biz_fail_count" then
+      actual_value = global_biz_fail_count
+    elseif feature == "global_biz_fail_percent" then
+      actual_value = global_biz_fail_count/global_exec_count * 100
+    elseif feature == "global_sys_fail_count" then
+      actual_value = global_sys_fail_count
+    elseif feature == "global_sys_fail_percent" then
+      actual_value = global_sys_fail_count/global_exec_count * 100
+    elseif feature == "global_fail_count" then
+      actual_value = global_biz_fail_count + global_sys_fail_count
+    elseif feature == "global_fail_percent" then
+      actual_value = (global_biz_fail_count + global_sys_fail_count)/global_exec_count * 100 
+    else
+      actual_value = 0
+    end       
+  else
+    local avg_exec_time, biz_fail_count, sys_fail_count, total_exec_count = status.avg_exec_time, status.biz_fail_count, status.sys_fail_count, status.total_exec_count
+    if feature == "avg_exec_time" then
+      actual_value = avg_exec_time
+    elseif feature == "biz_fail_count" then
+      actual_value = biz_fail_count
+    elseif feature == "biz_fail_percent" then
+      actual_value = biz_fail_count/total_exec_count * 100
+    elseif feature == "sys_fail_count" then
+      actual_value = sys_fail_count
+    elseif feature == "sys_fail_percent" then
+      actual_value = sys_fail_count/total_exec_count * 100
+    elseif feature == "fail_count" then
+      actual_value = sys_fail_count + biz_fail_count
+    elseif feature == "fail_percent" then
+      actual_value = (sys_fail_count + biz_fail_count)/total_exec_count * 100 
+    else
+      actual_value = 0
+    end    
+  end
+  return actual_value
+end
+
 local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
+  local current_seconds = ngx.time()
   local command_redis_key = restybase.get_command_redis_key(command)
-  local alarm_rules = get_alarm_rules(alarm_rules_name, command)
-  local fuse_rules = get_fuse_rules(fuse_rules_name, command)
+  local alarm_rules = restybase.get_request_command_rules(command, 'x-alarm-rules', alarm_rules_name)
+  local fuse_rules = restybase.get_request_command_rules(command, 'x-fuse-rules', fuse_rules_name)
   
   if alarm_rules == nil and fuse_rules == nil then
     ngx.ctx.request_ignorable = true
     return false
   end
   
-  local duration_exec_status = {}
-  local feature, duration, threshold, status, duration_key, actual_value
-  local avg_exec_time, biz_fail_count, sys_fail_count, total_exec_count
+  local duration_command_exec_status = {}
+  local duration_global_exec_status = {}
+  local status, duration_key, actual_value
   if alarm_rules ~= nil and next(alarm_rules) ~= nil then
     for _, rule in ipairs(alarm_rules) do
-      feature, duration, threshold = rule.feature, rule.duration, rule.threshold
-      duration_key = tostring(duration)
-      if duration_exec_status[duration_key] == nil then
-        duration_exec_status[duration_key] = calc_command_exec_features(command_redis_key, duration)
-      end
-      status = duration_exec_status[duration_key]
-      avg_exec_time, biz_fail_count, sys_fail_count, total_exec_count = status.avg_exec_time, status.biz_fail_count, status.sys_fail_count, status.total_exec_count
-      if feature == "avg_exec_time" then
-        actual_value = avg_exec_time
-      elseif feature == "biz_fail_count" then
-        actual_value = biz_fail_count
-      elseif feature == "biz_fail_percent" then
-        actual_value = biz_fail_count/total_exec_count * 100
-      elseif feature == "sys_fail_count" then
-        actual_value = sys_fail_count
-      elseif feature == "sys_fail_percent" then
-        actual_value = sys_fail_count
-      elseif feature == "fail_count" then
-        actual_value = sys_fail_count + biz_fail_count
-      elseif feature == "fail_percent" then
-        actual_value = (sys_fail_count + biz_fail_count)/total_exec_count * 100 
+      duration_key = tostring(rule.duration)
+      if rule.feature:startsWith("global_") then
+        if duration_global_exec_status[duration_key] == nil then
+          duration_global_exec_status[duration_key] = calc_global_exec_features(current_seconds, rule.duration)
+        end     
+        status = duration_global_exec_status[duration_key] 
       else
-        actual_value = 0
+        if duration_command_exec_status[duration_key] == nil then
+          duration_command_exec_status[duration_key] = calc_command_exec_features(command_redis_key, rule.duration)
+        end     
+        status = duration_command_exec_status[duration_key]        
       end
-      
-      if actual_value >= threshold then
+      actual_value = calc_feature_actual_value(rule.feature, status)
+      if actual_value >= rule.threshold then
         -- Perform the alerting operation asynchronously
         if restybase.check_probability(rule.probability) then
           local msg = {
             feature = rule.feature,
             duration = rule.duration,
             threshold = rule.threshold,
-            probability = rule.probability or 100
+            probability = rule.probability or 100,
             command = command,
             actual_value = actual_value,
-            client_ip = client_ip = ngx.var.remote_addr,
+            client_ip = ngx.var.remote_addr,
             trigger_time = ngx.time()
           }
           local ok, err = ngx.timer.at(0, timer_send_alarm, cjson.encode(msg))
@@ -269,33 +324,21 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
   end
   
   for _, rule in ipairs(fuse_rules) do
-    feature, duration, threshold = rule.feature, rule.duration, rule.threshold
-    duration_key = tostring(duration)
-    if duration_exec_status[duration_key] == nil then
-      duration_exec_status[duration_key] = calc_command_exec_features(command_redis_key, duration)
-    end
-    status = duration_exec_status[duration_key]
-    avg_exec_time, biz_fail_count, sys_fail_count, total_exec_count = status.avg_exec_time, status.biz_fail_count, status.sys_fail_count, status.total_exec_count
-    
-    if feature == "avg_exec_time" then
-      actual_value = avg_exec_time
-    elseif feature == "biz_fail_count" then
-      actual_value = biz_fail_count
-    elseif feature == "biz_fail_percent" then
-      actual_value = biz_fail_count/total_exec_count * 100
-    elseif feature == "sys_fail_count" then
-      actual_value = sys_fail_count
-    elseif feature == "sys_fail_percent" then
-      actual_value = sys_fail_count
-    elseif feature == "fail_count" then
-      actual_value = sys_fail_count + biz_fail_count
-    elseif feature == "fail_percent" then
-      actual_value = (sys_fail_count + biz_fail_count)/total_exec_count * 100 
+    duration_key = tostring(rule.duration)
+    if rule.feature:startsWith("global_") then
+      if duration_global_exec_status[duration_key] == nil then
+        duration_global_exec_status[duration_key] = calc_global_exec_features(current_seconds, rule.duration)
+      end     
+      status = duration_global_exec_status[duration_key] 
     else
-      actual_value = 0
+      if duration_command_exec_status[duration_key] == nil then
+        duration_command_exec_status[duration_key] = calc_command_exec_features(command_redis_key, rule.duration)
+      end     
+      status = duration_command_exec_status[duration_key]        
     end
+    actual_value = calc_feature_actual_value(rule.feature, status)
     
-    if actual_value >= threshold then
+    if actual_value >= rule.threshold then
       -- Attempt to trigger circuit breaking; if circuit breaking is confirmed, return immediately; otherwise, continue to evaluate other rules.
       if restybase.check_probability(rule.probability) then
         local actual_value_str = tostring(actual_value)
@@ -305,7 +348,7 @@ local function do_alarm_and_fuse(alarm_rules_name, fuse_rules_name, command)
           threshold_str = string.format("%.2f", rule.threshold) .. "%"
         end
         
-        ngx.log(ngx.ERR, "[FUSING] The feature [", rule.feature, "] for the command [", command, "] is ", actual_value_str, " in the last ", rule.duration, " seconds, exceeding the threshold of ", threshold_str, probability_str)        
+        ngx.log(ngx.ERR, "[FUSING] The feature [", rule.feature, "] for the command [", command, "] is ", actual_value_str, " in the last ", rule.duration, " seconds, exceeding the threshold of ", threshold_str)        
         return true
       end
     end
@@ -316,8 +359,8 @@ end
 local function get_command_redis_keys(logs, client, expired_seconds, expired_offset)
   client:init_pipeline(2)
   
-  client:zrange("resty_aesm_last_exec_time", 0, -1)
-  client:zremrangebyscore("resty_aesm_last_exec_time", 0, expired_offset)
+  client:zrange("resty_apistatus_last_exec_time", 0, -1)
+  client:zremrangebyscore("resty_apistatus_last_exec_time", 0, expired_offset)
   
   local responses, errors = client:commit_pipeline()
   
@@ -341,8 +384,8 @@ local function clear_command_expired_data(client, expired_seconds, expired_offse
   client:init_pipeline(count)
   
   for _, command_redis_key in ipairs(command_redis_keys) do
-    client:zremrangebyscore("resty_aesm_exec_time_" .. command_redis_key, 0, expired_offset)
-    client:zremrangebyscore("resty_aesm_exec_status_" .. command_redis_key, 0, expired_offset)
+    client:zremrangebyscore("resty_apistatus_exec_time_" .. command_redis_key, 0, expired_offset)
+    client:zremrangebyscore("resty_apistatus_exec_status_" .. command_redis_key, 0, expired_offset)
   end
 
   local responses, errors = client:commit_pipeline()
@@ -363,7 +406,7 @@ end
 
 
 -- Log the execution time and status of a single command, where exec_status is defined as: 1 for execution success, 2 for business exception failure, and 3 for system exception failure.
-local function timer_set_command_exec_status(premature, command_redis_key, exec_time, exec_status)
+local function timer_set_command_exec_status(premature, time_slice, time_offset, command_redis_key, exec_time, exec_status)
   if premature then
     return
   end
@@ -373,15 +416,28 @@ local function timer_set_command_exec_status(premature, command_redis_key, exec_
     return
   end
   
-  local current_offset = restybase.microseconds_offset()
-  local current_offset_prefix = tostring(current_offset) .. '_'  
+  local current_offset = time_offset
+  local current_offset_prefix = tostring(time_offset) .. '_'  
+  local expire_time = get_expired_seconds()
+  local time_slice_str = tostring(time_slice)
   
-  client:init_pipeline(3)
+  client:init_pipeline(7)
 
-  client:zadd("resty_aesm_last_exec_time", current_offset, command_redis_key)
-  client:zadd("resty_aesm_exec_time_" .. command_redis_key, current_offset, current_offset_prefix .. tostring(exec_time))
-  client:zadd("resty_aesm_exec_status_" .. command_redis_key, current_offset, current_offset_prefix .. tostring(exec_status))
+  client:zadd("resty_apistatus_last_exec_time", current_offset, command_redis_key)
+  client:zadd("resty_apistatus_exec_time_" .. command_redis_key, current_offset, current_offset_prefix .. tostring(exec_time))
+  client:zadd("resty_apistatus_exec_status_" .. command_redis_key, current_offset, current_offset_prefix .. tostring(exec_status))
   
+  client:incr("resty_apistatus_global_exec_count_" .. time_slice_str)
+  client:expire("resty_apistatus_global_exec_count_" .. time_slice_str, expire_time)
+  
+  if exec_status == 2 then
+    client:incr("resty_apistatus_global_bizfail_count_" .. time_slice_str)
+    client:expire("resty_apistatus_global_bizfail_count_" .. time_slice_str, expire_time)
+  elseif exec_status == 3 then
+    client:incr("resty_apistatus_global_sysfail_count_" .. time_slice_str)
+    client:expire("resty_apistatus_global_sysfail_count_" .. time_slice_str, expire_time)    
+  end
+
   local responses, errors = client:commit_pipeline()
   restybase.close_redis_client(client)
   
@@ -398,7 +454,7 @@ local function timer_set_command_exec_status(premature, command_redis_key, exec_
 
 end
 
--- Initialize the module; params include: alarm_http_url (the URL of the alerting interface).
+-- Initialize the module; params include: alarm_http_url (the URL of the alerting interface), expired_seconds (the expiration time of the Redis cache, in seconds)
 function _M.init_by_lua_block(params)
   if params == nil or next(params) == nil then
     return
@@ -406,6 +462,13 @@ function _M.init_by_lua_block(params)
   
   if params.alarm_http_url ~= nil and params.alarm_http_url ~= "" then
     _M.alarm_http_url = params.alarm_http_url
+  end
+  
+  if params.expired_seconds ~= nil then
+    local expired_seconds = tonumber(params.expired_seconds)
+    if expired_seconds ~= nil and expired_seconds > 0 then
+      _M.expired_seconds = expired_seconds
+    end
   end
   
 end
@@ -451,15 +514,15 @@ function _M.header_filter_by_lua_block()
   end
   
   -- Perform the logging operation asynchronously, as network API usage is not allowed in synchronous operations.
-  local ok, err = ngx.timer.at(0, timer_set_command_exec_status, command_redis_key, exec_time, exec_status)
+  local ok, err = ngx.timer.at(0, timer_set_command_exec_status, ngx.time(), restybase.microseconds_offset(), command_redis_key, exec_time, exec_status)
   if not ok then
       ngx.log(ngx.ERR, "failed to create timer: ", err)
-  end   
+  end
 end
 
-function _M.access_by_lua_block_clear(expired_seconds)
+function _M.access_by_lua_block_clear()
   local logs = {}
-  logs[1] = string.format("[%s], start clear api_exec_status_monitor redis cache expired %d seconds ago", os.date("%Y/%m/%d %H:%M:%S", os.time()), expired_seconds)
+  logs[1] = string.format("[%s], start clear api_exec_status_monitor redis cache expired %d seconds ago", os.date("%Y/%m/%d %H:%M:%S", os.time()), get_expired_seconds())
   
   local client = restybase.get_redis_client()
   if client == nil then
@@ -467,9 +530,9 @@ function _M.access_by_lua_block_clear(expired_seconds)
     return
   end
   
-  local expired_offset = restybase.microseconds_offset() - expired_seconds * 1000000
+  local expired_offset = restybase.microseconds_offset() - get_expired_seconds() * 1000000
   
-  local command_redis_keys = get_command_redis_keys(logs, client, expired_seconds, expired_offset)
+  local command_redis_keys = get_command_redis_keys(logs, client, get_expired_seconds(), expired_offset)
   
   if next(command_redis_keys) == nil then
     restybase.close_redis_client(client)
@@ -481,7 +544,7 @@ function _M.access_by_lua_block_clear(expired_seconds)
   local total = #command_redis_keys * 2
   local count = 0
   for _, sublist in ipairs(batches) do
-    count = count + clear_command_expired_data(client, expired_seconds, expired_offset, sublist)
+    count = count + clear_command_expired_data(client, get_expired_seconds(), expired_offset, sublist)
   end
   restybase.close_redis_client(client)
   

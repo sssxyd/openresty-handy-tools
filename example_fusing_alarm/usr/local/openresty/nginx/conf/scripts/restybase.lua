@@ -197,31 +197,50 @@ function _M.close_redis_client(client)
   end
 end
 
-function _M.get_command_rules(rule_name, command)
-  if rule_name == nil or rule_name == "" then
-    return nil
+function _M.get_request_command_rules(command, header_name, rule_name)
+  local rules = {}
+  if string.isNullOrEmpty(command) then
+    return rules
   end
   
-  if _G.rules == nil or _G.rules[rule_name] == nil then
-    return nil
+  --First, extract the client-defined rules from the request header
+  if not string.isNullOrEmpty(header_name) then
+    local rule_str = ngx.req.get_headers()[header_name]
+    if not string.isNullOrEmpty(rule_str) then 
+      local feature, duration, threshold, probability
+      local list_rules = rule_str:trim():split(",")
+      for _, rule in ipairs(list_rules) do
+        local items = rule:trim():split(":")
+        local len = #items
+        if len == 3 then
+          table.insert(rules, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = 100 })
+        elseif len == 4 then
+          table.insert(rules, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = tonumber(items[4]:trim()) })
+        end 
+      end    
+    end
   end
   
-  local rules = _G.rules[rule_name]
-  
-  local ret
-  if rules.commands ~= nil then
-    ret = rules.commands[command]
+  --Retrieve the server-defined rules from the rule file
+  if string.isNullOrEmpty(rule_name) or _G.rules[rule_name] == nil then
+    return rules
   end
   
-  if ret == nil then
-    ret = rules.global
+  local json_rules = _G.rules[rule_name]
+  if json_rules.commands ~= nil and json_rules.commands[command] ~= nil then
+    --Second, extract the specific rules for the current command from the rule file.
+    local specified_command_rules = json_rules.commands[command]
+    for i = 1, #specified_command_rules do
+      rules[#rules + 1] = specified_command_rules[i]
+    end
+  elseif json_rules.global ~= nil then
+    --Finally, if the specific rules for the current command do not exist in the rule file, use the global rules.
+    for i = 1, #json_rules.global do
+      rules[#rules + 1] = json_rules[i]
+    end
   end
   
-  if ret ~= nil and next(ret) == nil then
-    ret = nil
-  end
-  
-  return ret
+  return rules
 end
 
 function _M.get_request_command()
@@ -230,6 +249,35 @@ end
 
 function _M.get_command_redis_key(command)
   return string.gsub(command, "%W", "_")
+end
+
+function _M.get_request_header_rules(header_name)
+  if string.isNullOrEmpty(header_name) then
+    return nil
+  end
+  local rule_str = ngx.req.get_headers()[header_name]
+  if string.isNullOrEmpty(rule_str) then
+    return nil
+  end
+  
+  local result = {}
+  local feature, duration, threshold, probability
+  local rules = rule_str:trim():split(",")
+  for _, rule in ipairs(rules) do
+    local items = rule:trim():split(":")
+    local len = #items
+    if len == 3 then
+      table.insert(result, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = 100 })
+    elseif len == 4 then
+      table.insert(result, {feature = items[1]:trim(), duration = tonumber(items[2]:trim()), threshold = tonumber(items[3]:trim()), probability = tonumber(items[4]:trim()) })
+    end 
+  end
+  
+  if next(result) == nil then
+    return nil
+  end
+  
+  return result  
 end
 
 function _M.get_request_start_time()
@@ -250,7 +298,7 @@ function _M.check_probability(probability)
     return false
   end
   
-  return math.random() * 100 > val
+  return math.random() * 100 < val
 end
 
 function _M.split_list(input_list, chunk_size)

@@ -67,7 +67,7 @@ local function calc_device_visit_hits(device_no, command_redis_key, start_second
 end
 
 
-local function timer_incr_visit_hits(premature, current_seconds, device_no, command_redis_key)
+local function timer_incr_visit_hits(premature, time_slice, device_no, command_redis_key)
   if premature then
     return
   end
@@ -77,8 +77,8 @@ local function timer_incr_visit_hits(premature, current_seconds, device_no, comm
     return
   end   
   
-  local key1 = "resty_dal_tcv_" .. device_no .. "_" .. current_seconds
-  local key2 = "resty_dal_scv_" .. device_no .. "_" .. command_redis_key .. "_" .. current_seconds
+  local key1 = "resty_dal_tcv_" .. device_no .. "_" .. time_slice
+  local key2 = "resty_dal_scv_" .. device_no .. "_" .. command_redis_key .. "_" .. time_slice
   local expire_time = get_expired_seconds()
   
   client:init_pipeline()
@@ -127,7 +127,7 @@ local function do_device_access_limit(current_seconds, device_no, command, comma
     
     if real_value >= tonumber(rule.threshold) then
       if restybase.check_probability(rule.probability) then
-        ngx.log(ngx.ERR, "[LIMIT] device[", device_no , "] command[", command, "] hits already ", real_value, " times in ", rule.duration, " seconds, reach  threshold[", rule.threshold , "] of rule ", rule.feature)
+        ngx.log(ngx.ERR, "[LIMIT] device[", device_no , "] command[", command, "] hits ", real_value, " times in ", rule.duration, " seconds, reach threshold[", rule.threshold , "] of rule ", rule.feature)
         return true
       end
     end
@@ -177,16 +177,11 @@ function _M.access_by_lua_block(params)
     return true
   end  
   
-  if string.isNullOrEmpty(params.rule) then
-    return false
-  end
-  
-  -- If the rule is empty, it means no rate limit restrictions will be applied.
-  local rules = restybase.get_command_rules(params.rule, command)
-  if rules == nil then
+  local rules = restybase.get_request_command_rules(command, 'x-limit-rules', params.rule)
+  if next(rules) == nil then
     ngx.log(ngx.INFO, "rules is empty for ", params.rule, " and command ", command)
     return false
-  end  
+  end
   
   local command_redis_key = restybase.get_command_redis_key(command)
   local current_seconds = ngx.time()
