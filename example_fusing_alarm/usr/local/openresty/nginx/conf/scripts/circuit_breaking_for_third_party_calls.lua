@@ -109,15 +109,16 @@ local function calc_global_exec_features(current_seconds, duration)
   local global_exec_count = 0
   local global_biz_fail_count = 0
   local global_sys_fail_count = 0
+  
   for i, res in ipairs(responses) do
     local value = 0
     if res ~= ngx.null then
       value = (tonumber(res) or 0)
     end
     
-    if idx < second_count then
+    if idx < seconds_count then
       global_exec_count = global_exec_count + value
-    elseif idx < second_count * 2 then
+    elseif idx < seconds_count * 2 then
       global_biz_fail_count = global_biz_fail_count + value
     else
       global_sys_fail_count = global_sys_fail_count + value
@@ -125,6 +126,8 @@ local function calc_global_exec_features(current_seconds, duration)
     
     idx = idx + 1
   end  
+  
+  ngx.log(ngx.ERR, "global_exec_count:", global_exec_count, " global_biz_fail_count:", global_biz_fail_count, " global_sys_fail_count:", global_sys_fail_count)
   
   return {global_exec_count = global_exec_count, global_biz_fail_count = global_biz_fail_count, global_sys_fail_count = global_sys_fail_count}
 end
@@ -228,7 +231,7 @@ end
 
 local function calc_feature_actual_value(feature, status)
   local actual_value = 0
-  if feature:startsWith("total") then
+  if feature:startsWith("global_") then
     local global_exec_count, global_biz_fail_count, global_sys_fail_count = status.global_all_exec_count, status.global_biz_fail_count, status.global_sys_fail_count
     if feature == "global_biz_fail_count" then
       actual_value = global_biz_fail_count
