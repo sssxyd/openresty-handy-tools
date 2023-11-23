@@ -236,7 +236,7 @@ function _M.get_request_command_rules(command, header_name, rule_name)
   elseif json_rules.global ~= nil then
     --Finally, if the specific rules for the current command do not exist in the rule file, use the global rules.
     for i = 1, #json_rules.global do
-      rules[#rules + 1] = json_rules[i]
+      rules[#rules + 1] = json_rules.global[i]
     end
   end
   
